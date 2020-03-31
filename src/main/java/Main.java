@@ -1,31 +1,28 @@
-import com.mongodb.AggregationOutput;
 import com.mongodb.BasicDBObject;
-import com.mongodb.DBObject;
 import com.mongodb.MongoClient;
-import com.mongodb.client.*;
-import com.mongodb.client.model.Aggregates;
+import com.mongodb.client.FindIterable;
+import com.mongodb.client.MongoCollection;
+import com.mongodb.client.MongoDatabase;
+import com.mongodb.client.model.BsonField;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.bson.BsonDocument;
+import org.bson.BsonString;
 import org.bson.Document;
-import org.bson.conversions.Bson;
 
+import java.io.BufferedInputStream;
+import java.io.FileInputStream;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.List;
+import java.io.InputStream;
+import java.util.*;
 
-import com.mongodb.client.model.Aggregates.*;
-
-import static com.mongodb.client.model.Accumulators.avg;
-import static com.mongodb.client.model.Accumulators.sum;
 import static com.mongodb.client.model.Aggregates.*;
 import static com.mongodb.client.model.Filters.eq;
+import static com.mongodb.client.model.Filters.lte;
 
 public class Main {
 
     private static final Logger logger = LogManager.getLogger();
-    private static final long SLEEP = 1000;
     static MongoClient mongoClient = new MongoClient("127.0.0.1", 27017);
 
     static MongoDatabase database = mongoClient.getDatabase("test");
@@ -34,6 +31,15 @@ public class Main {
     static MongoCollection<Document> collectionProduct = database.getCollection("Product");
     static MongoCollection<Document> collectionTempShop = database.getCollection("tempShop");
 
+    static String marks;
+    static Scanner in = new Scanner(System.in);
+    final static String REGEX_ADD_SHOP = "^(?<comand>(ДОБАВИТЬ_МАГАЗИН)\\s+(?<nameShop>[А-Яа-я]+)$)";
+    final static String REGEX_ADD_PRODUCT = "^(?<comand>(ДОБАВИТЬ_ТОВАР)\\s+(?<nameProduct>[А-Яа-я_]+)\\s+(?<priceProduct>[0-9,?|.?]+)$)";
+    final static String REGEX_ADD_PRODUCT_TO_SHOP = "^(?<comand>(ВЫСТАВИТЬ_ТОВАР)\\s+(?<nameProduct>[А-Яа-я_]+)\\s+(?<nameShop>[А-Яа-я_]+)$)";
+    final static String REGEX_STATISTICS = "^(?<comand>(СТАТИСТИКА_ТОВАРОВ)\\s+(?<nameShop>[А-Яа-я]+)$)";
+    final static String REGEX_HELP = "^HELP$";
+    final static String REGEX_EXIT = "^EXIT$";
+
     public static void main(String[] args) throws IOException {
 
         collectionShops.drop();
@@ -41,14 +47,85 @@ public class Main {
         collectionTempShop.drop();
 
         fillTrading();
-       getAllShops();
-       System.out.println("\nПродуктов  в магазине Перекресток " + countProductInShop("Перекресток"));
-       System.out.println("\nПродуктов  в магазине Алтын " + countProductInShop("Алтын"));
-       System.out.println("\nПродуктов  в магазине Пятачок " + countProductInShop("Пятачок"));
 
-       System.out.println("\nСредняя цена продуктов  в магазине Перекресток " + avgProductInShop("Перекресток"));
+        System.out.println("\nДоступны следующие команды: ДОБАВИТЬ_МАГАЗИН; ДОБАВИТЬ_ТОВАР; ВЫСТАВИТЬ_ТОВАР; СТАТИСТИКА_ТОВАРОВ");
+        System.out.println("дополнительные команды HELP, EXIT: \n");
 
+        while (true) {
+            System.out.println("\nВведите КОМАНДУ: \n");
+            marks = in.nextLine().trim();
+
+            if (marks.matches(REGEX_ADD_SHOP)) {
+                String[] parameter = marks.split(" ");
+                addShop(parameter[1]);
+
+            } else if (marks.matches(REGEX_EXIT)) {
+                exit();
+
+            } else if (marks.matches(REGEX_HELP)) {
+                help();
+
+            } else if (marks.matches(REGEX_ADD_PRODUCT)) {
+                String[] parameter = marks.split(" ");
+                addProduct(parameter[1], Double.parseDouble( parameter[2].replace(",",".") ));
+                continue;
+
+            } else if (marks.matches(REGEX_ADD_PRODUCT_TO_SHOP)) {
+                String[] parameter = marks.split(" ");
+                addProductToShop(parameter[1], parameter[2]);
+                continue;
+
+            } else if (marks.matches(REGEX_STATISTICS)) {
+                String[] parameter = marks.split(" ");
+                getAllShops();
+
+                //  — Общее количество товаров
+                System.out.println("\nПродуктов  в магазине " + parameter[1] + " = " + countProductInShop(parameter[1]) + " шт.");
+
+               //— Среднюю цену товара
+                System.out.println("\nСредняя цена продуктов  в магазине " + parameter[1] + " = " + avgProductInShop(parameter[1]) + " руб.");
+
+               //— Самый дорогой и самый дешевый товар
+                System.out.println("\nСамый дорогой продукт  в магазине " + parameter[1] + " => "
+                        + expensiveProductInShop(parameter[1]).entrySet().iterator().next().getKey()
+                        + " = "
+                        + expensiveProductInShop(parameter[1]).entrySet().iterator().next().getValue() + " руб.");
+
+                System.out.println("\nСамый дешевый продукт  в магазине " + parameter[1] + " => "
+                        + cheapProductInShop(parameter[1]).entrySet().iterator().next().getKey()
+                        + " = "
+                        + cheapProductInShop(parameter[1]).entrySet().iterator().next().getValue() + " руб.");
+
+                //— Количество товаров, дешевле 100 рублей.
+                double priceHigh = 100;
+                System.out.println("\nПродуктов  в магазине " + parameter[1] + " дешевле " + priceHigh +  " руб.: "
+                        + countProductInShopCheaper(parameter[1], priceHigh) + " наименования");
+
+                continue;
+
+            } else {
+                System.out.println("Неверно введена команда. Попробуйте еще раз!");
+            }
+        }
     }
+
+    private static void help() throws IOException {
+        String infoFile = "d:\\Skill\\IdeaProjects\\Shops\\src\\main\\resources\\info.txt";
+        InputStream input = new BufferedInputStream(new FileInputStream(infoFile));
+        byte[] buffer = new byte[8192];
+
+        try {
+            for (int length = 0; (length = input.read(buffer)) != -1;) {
+                System.out.write(buffer, 0, length);
+            }
+        } finally {
+            input.close();
+        }
+    }
+
+    private static void exit() {
+    System.exit(0);
+}
 
     public static int countProductInShopOld(String shopName) {
 
@@ -69,37 +146,85 @@ public class Main {
 
     public static int countProductInShop(String shopName) {
 
-        int results = collectionShops.aggregate(Arrays.asList(match(eq("Name", shopName)),
+        int countProduct = collectionShops.aggregate(Arrays.asList(match(eq("Name", shopName)),
                 unwind("$Product"),
                 count("count")
                 )).first().getInteger("count");
 
-        return results;
+        return countProduct;
     }
 
-    public static int avgProductInShop(String shopName) {
-        AggregateIterable<Document> results =
-                collectionShops.aggregate(Arrays.asList(match(eq("Name", shopName)),
-                        unwind("$Product"),//возникает ошибка о дублировании ID при обращении к results
-                out("tempShop")
+    public static int countProductInShopCheaper(String shopName, double priceHigh) {
+        collectionProduct.aggregate(Arrays.asList(match(lte("Price", priceHigh)),
+                out("tempProductCheaper")
         ));
 
-        AggregateIterable<Document> results2 =
+            int countProduct =
+                    collectionShops.aggregate(Arrays.asList(match(eq("Name", shopName)),
+                            lookup("tempProductCheaper", "Product", "Name", "ProductAndPrice"),
+                            unwind("$ProductAndPrice"),
+                            count(),
+                            out("tempShopSum2")
+                    )).first().getInteger("count");
+
+            return countProduct;
+    }
+
+
+    public static Map<String, Double> expensiveProductInShop(String shopName) {
+        double maxPrice =
                 collectionShops.aggregate(Arrays.asList(match(eq("Name", shopName)),
                         lookup("Product", "Product", "Name", "ProductAndPrice"),
-//                        unwind("$ProductAndPrice"), //возникает ошибка о дублировании ID  !!!!!!!!!!!
-//                        avg("Price", ),      //????? какое выражение указать вторым параметром??? !!!!!!!!!!!!
+                        unwind("$ProductAndPrice"),
+                        group("_id", new BsonField("max", new BsonDocument("$max", new BsonString("$ProductAndPrice.Price")))),
+                        out("tempShopMax")
+                ))
+        .first().getDouble("max");
+
+        String maxPriceProduct =
+               collectionProduct.aggregate(Arrays.asList(match(eq("Price", maxPrice)),
+                out("maxPriceProduct")
+               ))
+                .first().getString("Name");
+
+        Map<String, Double> maxPriceProductInShop = new HashMap<String, Double>();
+        maxPriceProductInShop.put(maxPriceProduct, maxPrice);
+
+        return maxPriceProductInShop;
+    }
+
+    public static Map<String, Double> cheapProductInShop(String shopName) {
+        double minPrice =
+                collectionShops.aggregate(Arrays.asList(match(eq("Name", shopName)),
+                        lookup("Product", "Product", "Name", "ProductAndPrice"),
+                        unwind("$ProductAndPrice"),
+                        group("_id", new BsonField("min", new BsonDocument("$min", new BsonString("$ProductAndPrice.Price")))),
+                        out("tempShopMax")
+                ))
+                        .first().getDouble("min");
+
+        String minPriceProduct =
+                collectionProduct.aggregate(Arrays.asList(match(eq("Price", minPrice)),
+                        out("minPriceProduct")
+                ))
+                        .first().getString("Name");
+
+        Map<String, Double> minPriceProductInShop = new HashMap<String, Double>();
+        minPriceProductInShop.put(minPriceProduct, minPrice);
+
+        return minPriceProductInShop;
+    }
+
+    public static double avgProductInShop(String shopName) {
+        double avgPrice =
+                collectionShops.aggregate(Arrays.asList(match(eq("Name", shopName)),
+                        lookup("Product", "Product", "Name", "ProductAndPrice"),
+                        unwind("$ProductAndPrice"),
+                        group("_id", new BsonField("averageCost", new BsonDocument("$avg", new BsonString("$ProductAndPrice.Price")))),
                         out("tempShop")
-                ));
+                )).first().getDouble("averageCost");
 
-
-
-        for (Document d : results2){
-            logger.info("\n Продукты в " + shopName + d.get("Product")+ d.get("ProductAndPrice"));
-
-        }
-
-        return 0;
+        return avgPrice;
     }
 
 
@@ -110,15 +235,12 @@ public class Main {
         var allShops = new HashSet<Document>();
         fit.into(allShops);
 
-
-
         for (Document shop : allShops) {
             logger.info("\nМагазин ===>  " + shop.getString("Name"));
             ArrayList ProductAll = (ArrayList) shop.get("Product");
             for (int i = 0; i < ProductAll.size(); i++)
                 logger.info("\tТовар ===>  " + ProductAll.get(i));
         }
-
     }
 
     public static HashSet<Document> getShopByName(String shopName) {
@@ -156,7 +278,7 @@ public class Main {
 
     }
 
-    public static boolean addProductToShop(String shopName, String product) {
+    public static boolean addProductToShop(String product, String shopName) {
         if (!isProductName(product)) return false;
 
         if (!isShopName(shopName)) return false;
@@ -180,12 +302,11 @@ public class Main {
             collectionProduct.insertOne(new Document()
                     .append("Name", productName)
                     .append("Price", price));
-
             return true;
+
         } else {
             collectionProduct.updateOne(eq("Name", productName)
                     , new Document("$set", new Document("Name", productName).append("Price", price)));
-
         }
         return false;
     }
@@ -215,28 +336,28 @@ public class Main {
         addProduct("Диван", 2500);
         addProduct("Диван", 3500);
 
-        addProductToShop("Перекресток", "Носки");
-        addProductToShop("Перекресток", "Варежки");
-        addProductToShop("Перекресток", "Вафли");
-        addProductToShop("Перекресток", "Хлеб");
-        addProductToShop("Перекресток", "Булки");
-        addProductToShop("Перекресток", "Бананы");
+        addProductToShop("Носки", "Перекресток");
+        addProductToShop("Варежки", "Перекресток");
+        addProductToShop("Вафли", "Перекресток");
+        addProductToShop("Хлеб", "Перекресток");
+        addProductToShop("Булки", "Перекресток");
+        addProductToShop("Бананы", "Перекресток");
 
-        addProductToShop("Алтын", "Носки");
-        addProductToShop("Алтын", "Варежки");
-        addProductToShop("Алтын", "Вафли");
-        addProductToShop("Алтын", "Хлеб");
-        addProductToShop("Алтын", "Булки");
-        addProductToShop("Алтын", "Бананы");
-        addProductToShop("Алтын", "Терка");
+        addProductToShop("Носки", "Алтын");
+        addProductToShop("Варежки", "Алтын");
+        addProductToShop("Вафли", "Алтын");
+        addProductToShop("Хлеб", "Алтын");
+        addProductToShop("Булки", "Алтын");
+        addProductToShop("Бананы", "Алтын");
+        addProductToShop("Терка", "Алтын");
 
-        addProductToShop("Пятачок", "Носки");
-        addProductToShop("Пятачок", "Варежки");
-        addProductToShop("Пятачок", "Вафли");
-        addProductToShop("Пятачок", "Хлеб");
-        addProductToShop("Пятачок", "Булки");
-        addProductToShop("Пятачок", "Бананы");
-        addProductToShop("Пятачок", "Диван");
+        addProductToShop("Носки", "Пятачок");
+        addProductToShop("Варежки", "Пятачок");
+        addProductToShop("Вафли", "Пятачок");
+        addProductToShop("Хлеб", "Пятачок");
+        addProductToShop("Булки", "Пятачок");
+        addProductToShop("Бананы", "Пятачок");
+        addProductToShop("Диван", "Пятачок");
 
 
     }
