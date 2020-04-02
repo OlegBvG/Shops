@@ -1,5 +1,6 @@
 import com.mongodb.BasicDBObject;
 import com.mongodb.MongoClient;
+import com.mongodb.MongoException;
 import com.mongodb.client.FindIterable;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
@@ -9,6 +10,7 @@ import org.apache.logging.log4j.Logger;
 import org.bson.BsonDocument;
 import org.bson.BsonString;
 import org.bson.Document;
+import org.bson.conversions.Bson;
 
 import java.io.BufferedInputStream;
 import java.io.FileInputStream;
@@ -27,9 +29,23 @@ public class Main {
 
     static MongoDatabase database = mongoClient.getDatabase("test");
 
-    static MongoCollection<Document> collectionShops = database.getCollection("Shops");
-    static MongoCollection<Document> collectionProduct = database.getCollection("Product");
-    static MongoCollection<Document> collectionTempShop = database.getCollection("tempShop");
+    //--------------------
+
+    private static final String STORES_COLLECTION_NAME = "Stores";
+    private static final String GOODS_COLLECTION_NAME = "Products";
+
+    private static final String STORE_FIELD_ID = "_id";
+    private static final String STORE_FIELD_NAME = "Name";
+    private static final String STORE_FIELD_GOODS = "Product";
+
+    private static final String GOODS_FIELD_ID = "_id";
+    private static final String GOODS_FIELD_NAME = "Name";
+    private static final String GOODS_FIELD_PRICE = "Price";
+    //-------------------------
+
+    static MongoCollection<Document> collectionShops = database.getCollection(STORES_COLLECTION_NAME);
+    static MongoCollection<Document> collectionProduct = database.getCollection(GOODS_COLLECTION_NAME);
+//    static MongoCollection<Document> collectionTempShop = database.getCollection("tempShop");
 
     static String marks;
     static Scanner in = new Scanner(System.in);
@@ -44,9 +60,10 @@ public class Main {
 
         collectionShops.drop();
         collectionProduct.drop();
-        collectionTempShop.drop();
+//        collectionTempShop.drop();
 
         fillTrading();
+//        statistic("Перекресток");
 
         System.out.println("\nДоступны следующие команды: ДОБАВИТЬ_МАГАЗИН; ДОБАВИТЬ_ТОВАР; ВЫСТАВИТЬ_ТОВАР; СТАТИСТИКА_ТОВАРОВ");
         System.out.println("дополнительные команды HELP, EXIT: \n");
@@ -77,31 +94,10 @@ public class Main {
 
             } else if (marks.matches(REGEX_STATISTICS)) {
                 String[] parameter = marks.split(" ");
-                getAllShops();
+//                getAllShops();
 
-                //  — Общее количество товаров
-                System.out.println("\nПродуктов  в магазине " + parameter[1] + " = " + countProductInShop(parameter[1]) + " шт.");
+                statistic(parameter[1]);
 
-               //— Среднюю цену товара
-                System.out.println("\nСредняя цена продуктов  в магазине " + parameter[1] + " = " + avgProductInShop(parameter[1]) + " руб.");
-
-               //— Самый дорогой и самый дешевый товар
-                System.out.println("\nСамый дорогой продукт  в магазине " + parameter[1] + " => "
-                        + expensiveProductInShop(parameter[1]).entrySet().iterator().next().getKey()
-                        + " = "
-                        + expensiveProductInShop(parameter[1]).entrySet().iterator().next().getValue() + " руб.");
-
-                System.out.println("\nСамый дешевый продукт  в магазине " + parameter[1] + " => "
-                        + cheapProductInShop(parameter[1]).entrySet().iterator().next().getKey()
-                        + " = "
-                        + cheapProductInShop(parameter[1]).entrySet().iterator().next().getValue() + " руб.");
-
-                //— Количество товаров, дешевле 100 рублей.
-                double priceHigh = 100;
-                System.out.println("\nПродуктов  в магазине " + parameter[1] + " дешевле " + priceHigh +  " руб.: "
-                        + countProductInShopCheaper(parameter[1], priceHigh) + " наименования");
-
-                continue;
 
             } else {
                 System.out.println("Неверно введена команда. Попробуйте еще раз!");
@@ -127,107 +123,6 @@ public class Main {
     System.exit(0);
 }
 
-    public static int countProductInShopOld(String shopName) {
-
-        var query = new BasicDBObject("Name",
-                new BasicDBObject("$eq", shopName));
-        FindIterable fit = collectionShops.find(query).limit(1);
-
-        var shop = new HashSet<Document>();
-        fit.into(shop);
-
-        for (Document s : shop) {
-
-            ArrayList ProductAll = (ArrayList) s.get("Product");
-            return ProductAll.size();
-        }
-        return 0;
-    }
-
-    public static int countProductInShop(String shopName) {
-
-        int countProduct = collectionShops.aggregate(Arrays.asList(match(eq("Name", shopName)),
-                unwind("$Product"),
-                count("count")
-                )).first().getInteger("count");
-
-        return countProduct;
-    }
-
-    public static int countProductInShopCheaper(String shopName, double priceHigh) {
-        collectionProduct.aggregate(Arrays.asList(match(lte("Price", priceHigh)),
-                out("tempProductCheaper")
-        ));
-
-            int countProduct =
-                    collectionShops.aggregate(Arrays.asList(match(eq("Name", shopName)),
-                            lookup("tempProductCheaper", "Product", "Name", "ProductAndPrice"),
-                            unwind("$ProductAndPrice"),
-                            count(),
-                            out("tempShopSum2")
-                    )).first().getInteger("count");
-
-            return countProduct;
-    }
-
-
-    public static Map<String, Double> expensiveProductInShop(String shopName) {
-        double maxPrice =
-                collectionShops.aggregate(Arrays.asList(match(eq("Name", shopName)),
-                        lookup("Product", "Product", "Name", "ProductAndPrice"),
-                        unwind("$ProductAndPrice"),
-                        group("_id", new BsonField("max", new BsonDocument("$max", new BsonString("$ProductAndPrice.Price")))),
-                        out("tempShopMax")
-                ))
-        .first().getDouble("max");
-
-        String maxPriceProduct =
-               collectionProduct.aggregate(Arrays.asList(match(eq("Price", maxPrice)),
-                out("maxPriceProduct")
-               ))
-                .first().getString("Name");
-
-        Map<String, Double> maxPriceProductInShop = new HashMap<String, Double>();
-        maxPriceProductInShop.put(maxPriceProduct, maxPrice);
-
-        return maxPriceProductInShop;
-    }
-
-    public static Map<String, Double> cheapProductInShop(String shopName) {
-        double minPrice =
-                collectionShops.aggregate(Arrays.asList(match(eq("Name", shopName)),
-                        lookup("Product", "Product", "Name", "ProductAndPrice"),
-                        unwind("$ProductAndPrice"),
-                        group("_id", new BsonField("min", new BsonDocument("$min", new BsonString("$ProductAndPrice.Price")))),
-                        out("tempShopMax")
-                ))
-                        .first().getDouble("min");
-
-        String minPriceProduct =
-                collectionProduct.aggregate(Arrays.asList(match(eq("Price", minPrice)),
-                        out("minPriceProduct")
-                ))
-                        .first().getString("Name");
-
-        Map<String, Double> minPriceProductInShop = new HashMap<String, Double>();
-        minPriceProductInShop.put(minPriceProduct, minPrice);
-
-        return minPriceProductInShop;
-    }
-
-    public static double avgProductInShop(String shopName) {
-        double avgPrice =
-                collectionShops.aggregate(Arrays.asList(match(eq("Name", shopName)),
-                        lookup("Product", "Product", "Name", "ProductAndPrice"),
-                        unwind("$ProductAndPrice"),
-                        group("_id", new BsonField("averageCost", new BsonDocument("$avg", new BsonString("$ProductAndPrice.Price")))),
-                        out("tempShop")
-                )).first().getDouble("averageCost");
-
-        return avgPrice;
-    }
-
-
 
     public static void getAllShops() {
         FindIterable fit = collectionShops.find();
@@ -245,7 +140,7 @@ public class Main {
 
     public static HashSet<Document> getShopByName(String shopName) {
 
-        var query = new BasicDBObject("Name",
+        var query = new BasicDBObject(STORE_FIELD_NAME,
                 new BasicDBObject("$eq", shopName));
         FindIterable fit = collectionShops.find(query);
 
@@ -257,7 +152,7 @@ public class Main {
 
     public static boolean isShopName(String shopName) {
 
-        var query = new BasicDBObject("Name",
+        var query = new BasicDBObject(STORE_FIELD_NAME,
                 new BasicDBObject("$eq", shopName));
         FindIterable fit = collectionShops.find(query);
 
@@ -270,8 +165,8 @@ public class Main {
     public static boolean addShop(String shopName) {
         if (!isShopName(shopName)) {
             collectionShops.insertOne(new Document()
-                    .append("Name", shopName)
-                    .append("Product", new HashSet<>()));
+                    .append(STORE_FIELD_NAME, shopName)
+                    .append(STORE_FIELD_GOODS, new HashSet<>()));
             return true;
         }
         return false;
@@ -285,12 +180,12 @@ public class Main {
 
         HashSet<Document> documentFind = getShopByName(shopName);
         for (Document doc : documentFind) {
-           ArrayList<String> productInShop = new ArrayList<String>((ArrayList) doc.get("Product"));
+           ArrayList<String> productInShop = new ArrayList<String>((ArrayList) doc.get(STORE_FIELD_GOODS));
 
             if (productInShop == null || !productInShop.contains(product)) {
                 productInShop.add(product);
-                collectionShops.updateOne(eq("Name", shopName)
-                        , new Document("$set", new Document("Name", shopName).append("Product", productInShop)));
+                collectionShops.updateOne(eq(STORE_FIELD_NAME, shopName)
+                        , new Document("$set", new Document(STORE_FIELD_NAME, shopName).append(STORE_FIELD_GOODS, productInShop)));
                 return true;
             }
         }
@@ -300,19 +195,19 @@ public class Main {
     public static boolean addProduct(String productName, double price) {
         if (!isProductName(productName)) {
             collectionProduct.insertOne(new Document()
-                    .append("Name", productName)
-                    .append("Price", price));
+                    .append(GOODS_FIELD_NAME, productName)
+                    .append(GOODS_FIELD_PRICE, price));
             return true;
 
         } else {
-            collectionProduct.updateOne(eq("Name", productName)
-                    , new Document("$set", new Document("Name", productName).append("Price", price)));
+            collectionProduct.updateOne(eq(GOODS_FIELD_NAME, productName)
+                    , new Document("$set", new Document(GOODS_FIELD_NAME, productName).append(GOODS_FIELD_PRICE, price)));
         }
         return false;
     }
 
     public static boolean isProductName(String productName) {
-        var query = new BasicDBObject("Name",
+        var query = new BasicDBObject(GOODS_FIELD_NAME,
                 new BasicDBObject("$eq", productName));
         FindIterable fit = collectionProduct.find(query);
         if (fit.iterator().hasNext()) {
@@ -358,8 +253,81 @@ public class Main {
         addProductToShop("Булки", "Пятачок");
         addProductToShop("Бананы", "Пятачок");
         addProductToShop("Диван", "Пятачок");
+    }
 
+    public static void statistic(String shopName) {
 
+        //создаем документ lookup в который принимаем товары из коллекции магазина которые
+// хранятся в STORE_FIELD_GOODS
+// и получаем связь с коллекций GOODS_COLLECTION_NAME и называем это goodsRef
+        List<Bson> aggregations = new ArrayList<>();
+        aggregations.add(match(eq(STORE_FIELD_NAME, shopName)));
+        aggregations.add(
+                new Document("$lookup",
+                        new Document()
+                                .append("localField", STORE_FIELD_GOODS)
+                                .append("foreignField", GOODS_FIELD_NAME)
+                                .append("from", GOODS_COLLECTION_NAME)
+                                .append("as", "goodsRef")
+                )
+        );
+
+        // разворачиваем список товаров
+        aggregations.add(
+                new Document("$unwind", new Document("path", "$goodsRef"))
+        );
+
+        // тут мы получаем товары меньше 100
+// в переменную список priceIsLessThan100 группируя по имени магазина
+// добавляем условие того что Price (тут промахнулся и не вставил константу)
+// меньше 100 используя оператор lt (less then)
+        aggregations.add(
+                new Document("$project",
+                        new Document()
+                                .append(STORE_FIELD_NAME, 1)
+                                .append("goodsRef", 1)
+                                .append("priceIsLessThan100",
+                                        new Document("$cond",
+                                                new Document()
+                                                        .append("if", new Document("$lt", Arrays.asList("$goodsRef.Price", 100)))
+                                                        .append("then", 1)
+                                                        .append("else", 0)
+                                        )
+                                )
+                )
+        );
+
+        // остальная агрегация уже проще
+        // получаем имя магазина из агрегации, получаем среднее значение $avg на основе цен товаров
+        // и прочие параметры также суммируем количество товаров меньше чем 100 руб
+        aggregations.add(
+                new Document("$group",
+                        new Document()
+                                .append(STORE_FIELD_ID, "$" + STORE_FIELD_NAME)
+                                .append("avg", new Document("$avg", "$goodsRef." + GOODS_FIELD_PRICE))
+                                .append("min", new Document("$min", "$goodsRef." + GOODS_FIELD_PRICE))
+                                .append("max", new Document("$max", "$goodsRef." + GOODS_FIELD_PRICE))
+                                .append("count", new Document("$sum", 1))
+                                .append("countWherePriceIsLessThan100", new Document("$sum", "$priceIsLessThan100"))
+                )
+        );
+
+        // это уже применение агрегации и получение данных и их вывод
+        try {
+            for (Document doc : collectionShops.aggregate(aggregations)) {
+                System.out.printf("--- %s%n %s%n %s%n %s%n %s%n %s%n",
+                       "Магазин - " + doc.getString(STORE_FIELD_ID),
+                       "Средняя цена продуктов: " + doc.getDouble("avg"),
+                       "Минимальная цена продукта: " + doc.getDouble("min"),
+                       "Максимальная цена продукта: " +  doc.getDouble("max"),
+                       "Количество продуктов: " +  doc.getInteger("count"),
+                       "Количество продуктов дешевле 100 руб.: " +  doc.getInteger("countWherePriceIsLessThan100")
+                );
+            }
+        } catch (
+                MongoException exception) {
+            exception.printStackTrace();
+        }
     }
 }
 
